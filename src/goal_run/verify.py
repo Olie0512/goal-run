@@ -1,0 +1,170 @@
+from __future__ import annotations
+
+import hashlib
+import json
+import os
+from dataclasses import asdict, dataclass, field
+from datetime import datetime, timezone
+from pathlib import Path
+from subprocess import TimeoutExpired, run
+
+from goal_run.errors import CheckFailed
+from goal_run.models import Goal
+
+EVIDENCE_DIRNAME = ".goal-run"
+EVIDENCE_FILENAME = "last-check.json"
+EVIDENCE_SCHEMA = 1
+DEFAULT_TIMEOUT = 300
+MAX_CAPTURE = 64_000
+
+
+def evidence_path(goal_path: Path) -> Path:
+    return goal_path.parent / EVIDENCE_DIRNAME / EVIDENCE_FILENAME
+
+
+def verifier_fingerprint(verifiers: list[str]) -> str:
+    payload = "\n".join(cmd.strip() for cmd in verifiers)
+    return hashlib.sha256(payload.encode("utf-8")).hexdigest()
+
+
+def _now() -> str:
+    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+
+
+def _clip(text: str) -> str:
+    if len(text) <= MAX_CAPTURE:
+        return text
+    return text[:MAX_CAPTURE] + "\n…[truncated]…"
+
+
+@dataclass
+class CommandResult:
+    cmd: str
+    exit_code: int
+    stdout: str = ""
+    stderr: str = ""
+
+
+@dataclass
+class Evidence:
+    schema: int = EVIDENCE_SCHEMA
+    ok: bool = False
+    slug: str = ""
+    fingerprint: str = ""
+    started_at: str = ""
+    finished_at: str = ""
+    commands: list[CommandResult] = field(default_factory=list)
+
+    def to_json(self) -> str:
+        payload = asdict(self)
+        return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
+
+    @classmethod
+    def from_dict(cls, data: dict) -> Evidence:
+        commands = [CommandResult(**row) for row in data.get("commands", [])]
+        return cls(
+            schema=int(data.get("schema", 0)),
+            ok=bool(data.get("ok")),
+            slug=str(data.get("slug", "")),
+            fingerprint=str(data.get("fingerprint", "")),
+            started_at=str(data.get("started_at", "")),
+            finished_at=str(data.get("finished_at", "")),
+            commands=commands,
+        )
+
+
+def load_evidence(path: Path) -> Evidence | None:
+    if not path.is_file():
+        return None
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return None
+    if not isinstance(data, dict):
+        return None
+    try:
+        return Evidence.from_dict(data)
+    except (TypeError, ValueError):
+        return None
+
+
+def save_evidence(path: Path, evidence: Evidence) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(evidence.to_json(), encoding="utf-8")
+
+
+def clear_evidence(path: Path) -> None:
+    if path.is_file():
+        path.unlink()
+
+
+def evidence_is_current(evidence: Evidence | None, goal: Goal) -> bool:
+    if evidence is None:
+        return False
+    if evidence.schema != EVIDENCE_SCHEMA:
+        return False
+    if evidence.slug != goal.slug:
+        return False
+    if evidence.fingerprint != verifier_fingerprint(goal.verifiers):
+        return False
+    return True
+
+
+def run_verifiers(
+    goal: Goal,
+    *,
+    timeout: int = DEFAULT_TIMEOUT,
+    env: dict[str, str] | None = None,
+) -> Evidence:
+    if not goal.verifiers:
+        raise CheckFailed(
+            "No verifier commands in GOAL.md. "
+            "goal-run will not accept a self-grade — add a shell command under `verifier:`."
+        )
+    cwd = goal.path.parent if goal.path else Path.cwd()
+    started = _now()
+    results: list[CommandResult] = []
+    ok = True
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
+
+    for cmd in goal.verifiers:
+        try:
+            completed = run(
+                cmd,
+                shell=True,
+                cwd=cwd,
+                capture_output=True,
+                text=True,
+                timeout=timeout,
+                env=merged_env,
+            )
+            result = CommandResult(
+                cmd=cmd,
+                exit_code=int(completed.returncode),
+                stdout=_clip(completed.stdout or ""),
+                stderr=_clip(completed.stderr or ""),
+            )
+        except TimeoutExpired as exc:
+            ok = False
+            result = CommandResult(
+                cmd=cmd,
+                exit_code=124,
+                stdout=_clip(exc.stdout or "") if isinstance(exc.stdout, str) else "",
+                stderr=_clip((exc.stderr or "") if isinstance(exc.stderr, str) else "")
+                + f"\nverifier timed out after {timeout}s",
+            )
+        if result.exit_code != 0:
+            ok = False
+        results.append(result)
+
+    return Evidence(
+        schema=EVIDENCE_SCHEMA,
+        ok=ok,
+        slug=goal.slug,
+        fingerprint=verifier_fingerprint(goal.verifiers),
+        started_at=started,
+        finished_at=_now(),
+        commands=results,
+    )

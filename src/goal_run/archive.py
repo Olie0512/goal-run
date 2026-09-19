@@ -33,6 +33,8 @@ def archive_goal(goal: Goal, *, date: str, note: str = "completed and archived")
         goal.path.unlink()
     except OSError as exc:
         dest.unlink(missing_ok=True)
-        raise ArchiveError(f"Archived copy written but failed to remove {goal.path}: {exc}") from exc
+        raise ArchiveError(
+            f"Archived copy written but failed to remove {goal.path}: {exc}"
+        ) from exc
     clear_evidence(evidence_path(goal.path))
     return dest

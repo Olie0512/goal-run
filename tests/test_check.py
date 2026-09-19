@@ -3,8 +3,7 @@ from __future__ import annotations
 import json
 
 from goal_run.verify import evidence_path
-
-from .conftest import copy_fixture, invoke, output_of
+from tests.support import copy_fixture, invoke, output_of
 
 
 def test_check_fails_on_red_fixture(runner, tmp_path):

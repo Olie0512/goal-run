@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from goal_run import __version__
 from goal_run.parse import load_goal
-
-from .conftest import copy_fixture, invoke, output_of
+from tests.support import copy_fixture, invoke, output_of
 
 
 def test_version(runner):

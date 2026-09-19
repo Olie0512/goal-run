@@ -26,8 +26,11 @@ jobs:
       - name: Fixture check is RED then GREEN
         run: |
           set -euo pipefail
-          if goal-run check --goal tests/fixtures/check_fail.md; then
+          tmp="$(mktemp -d)"
+          cp tests/fixtures/check_fail.md "$tmp/GOAL.md"
+          if goal-run check --goal "$tmp/GOAL.md"; then
             echo "expected RED (exit 1) on check_fail.md" >&2
             exit 1
           fi
-          goal-run check --goal tests/fixtures/check_pass.md
+          cp tests/fixtures/check_pass.md "$tmp/GOAL.md"
+          goal-run check --goal "$tmp/GOAL.md"

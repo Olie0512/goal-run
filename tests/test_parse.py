@@ -5,8 +5,7 @@ import pytest
 from goal_run.errors import GoalParseError
 from goal_run.models import Status
 from goal_run.parse import load_goal, parse_goal_text, slugify
-
-from .conftest import FIXTURES
+from tests.support import FIXTURES
 
 
 @pytest.mark.parametrize(
@@ -55,7 +54,9 @@ def test_frontmatter_only_rejected():
 
 def test_bad_status_rejected():
     with pytest.raises(GoalParseError, match="status"):
-        parse_goal_text("---\nstatus: vibes\nslug: x\nobjective: o\n---\n\n## Checklist\n\n- [ ] a\n")
+        parse_goal_text(
+            "---\nstatus: vibes\nslug: x\nobjective: o\n---\n\n## Checklist\n\n- [ ] a\n"
+        )
 
 
 def test_slugify():

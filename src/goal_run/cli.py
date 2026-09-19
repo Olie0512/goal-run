@@ -2,7 +2,7 @@ from __future__ import annotations
 
 from datetime import date as date_cls
 from pathlib import Path
-from typing import Annotated, Optional
+from typing import Annotated
 
 import typer
 
@@ -59,7 +59,7 @@ def version_callback(value: bool) -> None:
 @app.callback()
 def _root(
     version: Annotated[
-        Optional[bool],
+        bool | None,
         typer.Option(
             "--version",
             "-V",
@@ -79,7 +79,10 @@ def _default_goal(objective: str) -> Goal:
         slug=slug,
         objective=objective,
         verifiers=[
-            'python -c "import pathlib,sys; sys.exit(0 if pathlib.Path(\'GOAL.md\').is_file() else 1)"'
+            (
+                'python -c "import pathlib,sys; '
+                "sys.exit(0 if pathlib.Path('GOAL.md').is_file() else 1)\""
+            )
         ],
         checklist=[
             ChecklistItem("Replace the verifier with a command that proves this goal is done"),
@@ -98,12 +101,12 @@ def _default_goal(objective: str) -> Goal:
 @app.command()
 def init(
     objective: Annotated[
-        Optional[str],
+        str | None,
         typer.Argument(help="One-sentence objective (verifiable done condition)"),
     ] = None,
-    slug: Annotated[Optional[str], typer.Option(help="kebab-case slug")] = None,
+    slug: Annotated[str | None, typer.Option(help="kebab-case slug")] = None,
     verifier: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(help="Shell command that exits 0 when the goal is actually done"),
     ] = None,
     goal: GoalOption = Path("GOAL.md"),
@@ -175,7 +178,10 @@ def _print_evidence(evidence) -> None:
     for i, result in enumerate(evidence.commands, start=1):
         label = "GREEN" if result.exit_code == 0 else "RED"
         color = typer.colors.GREEN if result.exit_code == 0 else typer.colors.RED
-        typer.secho(f"[{label}] {i}/{len(evidence.commands)} exit {result.exit_code}: {result.cmd}", fg=color)
+        typer.secho(
+            f"[{label}] {i}/{len(evidence.commands)} exit {result.exit_code}: {result.cmd}",
+            fg=color,
+        )
         if result.stdout.strip():
             typer.echo(result.stdout.rstrip())
         if result.stderr.strip():
@@ -232,7 +238,7 @@ def done(
     goal: GoalOption = Path("GOAL.md"),
     timeout: TimeoutOption = DEFAULT_TIMEOUT,
     date: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(help="Archive date YYYY-MM-DD (defaults to today)"),
     ] = None,
 ) -> None:
@@ -256,7 +262,7 @@ def done(
 def archive(
     goal: GoalOption = Path("GOAL.md"),
     date: Annotated[
-        Optional[str],
+        str | None,
         typer.Option(help="Archive date YYYY-MM-DD (defaults to today)"),
     ] = None,
     force: Annotated[

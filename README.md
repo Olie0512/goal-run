@@ -78,7 +78,7 @@ verifier:
 - 2026-09-19: initialized
 ```
 
-`verifier` is a shell command or a list of them. They run with `cwd` = the directory that contains `GOAL.md`. Exit 0 is the only green.
+`verifier` is a shell command or a list of them. They run with `cwd` = the directory that contains `GOAL.md`. Exit 0 is the only green. A command that starts with `python` or `python3` is executed with the same interpreter as `goal-run` (so fixtures work on images that only ship `python3`).
 
 ## Red → green → archive
 

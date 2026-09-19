@@ -3,8 +3,10 @@ from __future__ import annotations
 import hashlib
 import json
 import os
+import shlex
+import sys
 from dataclasses import asdict, dataclass, field
-from datetime import datetime, timezone
+from datetime import UTC, datetime
 from pathlib import Path
 from subprocess import TimeoutExpired, run
 
@@ -28,7 +30,25 @@ def verifier_fingerprint(verifiers: list[str]) -> str:
 
 
 def _now() -> str:
-    return datetime.now(timezone.utc).replace(microsecond=0).isoformat()
+    return datetime.now(UTC).replace(microsecond=0).isoformat()
+
+
+def bind_python_executable(cmd: str) -> str:
+    """Run a leading ``python`` / ``python3`` token with ``sys.executable``.
+
+    Authors write ``python -c ...`` in GOAL.md. Some images only ship
+    ``python3``. Using the interpreter that launched goal-run keeps checks
+    portable and avoids a hidden second runtime.
+    """
+    posix = os.name != "nt"
+    try:
+        parts = shlex.split(cmd, posix=posix)
+    except ValueError:
+        return cmd
+    if not parts or parts[0] not in {"python", "python3"}:
+        return cmd
+    parts[0] = sys.executable
+    return shlex.join(parts)
 
 
 def _clip(text: str) -> str:
@@ -130,9 +150,10 @@ def run_verifiers(
         merged_env.update(env)
 
     for cmd in goal.verifiers:
+        bound = bind_python_executable(cmd)
         try:
             completed = run(
-                cmd,
+                bound,
                 shell=True,
                 cwd=cwd,
                 capture_output=True,

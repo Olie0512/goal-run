@@ -207,7 +207,10 @@ def parse_goal_text(text: str, *, path: Path | None = None) -> Goal:
     if not objective:
         raise GoalParseError("objective is required (frontmatter or ## Objective)")
 
-    verifiers = _as_str_list(fm.get("verifier") if fm.get("verifier") is not None else fm.get("verifiers"))
+    raw_verifier = fm.get("verifier")
+    if raw_verifier is None:
+        raw_verifier = fm.get("verifiers")
+    verifiers = _as_str_list(raw_verifier)
     if not verifiers and "verifier" in sections:
         verifiers = _parse_verifiers_from_body(sections["verifier"])
 

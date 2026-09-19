@@ -2,8 +2,7 @@ from __future__ import annotations
 
 from goal_run.parse import load_goal
 from goal_run.verify import evidence_path
-
-from .conftest import copy_fixture, invoke, output_of
+from tests.support import copy_fixture, invoke, output_of
 
 
 def test_done_refuses_open_checklist_even_after_green_check(runner, tmp_path):

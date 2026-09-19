@@ -23,6 +23,7 @@ Requires Python 3.11+.
 ```bash
 git clone https://github.com/Olie0512/goal-run.git
 cd goal-run
+# A venv is recommended — and required on some systems (~5s): python3 -m venv .venv && source .venv/bin/activate
 pip install -e .
 goal-run check --goal tests/fixtures/check_fail.md   # RED  (exit 1)
 goal-run check --goal tests/fixtures/check_pass.md   # GREEN (exit 0)

@@ -10,7 +10,7 @@ import typer
 from goal_run import __version__
 from goal_run.archive import archive_goal
 from goal_run.errors import DoneRefused, GoalError
-from goal_run.models import ChecklistItem, Goal, ProgressEntry, Status
+from goal_run.models import ChecklistItem, Goal, ProgressEntry, Status, VerifierBackend
 from goal_run.parse import load_goal, render_goal, slugify
 from goal_run.verify import (
     DEFAULT_TIMEOUT,
@@ -36,7 +36,11 @@ GoalOption = Annotated[
 ]
 TimeoutOption = Annotated[
     int,
-    typer.Option("--timeout", help="Seconds per verifier command", show_default=True),
+    typer.Option(
+        "--timeout",
+        help="Seconds per verifier command (or Jev HTTP request)",
+        show_default=True,
+    ),
 ]
 
 
@@ -95,7 +99,7 @@ def _default_goal(objective: str) -> Goal:
         non_goals=[
             "Multi-agent orchestration",
             "Cloud sync, auth, or a dashboard",
-            "An LLM inside this CLI",
+            "A required model or paid API",
         ],
         progress=[ProgressEntry(date=_today(), note="initialized by goal-run")],
     )
@@ -157,7 +161,11 @@ def status(goal: GoalOption = Path("GOAL.md")) -> None:
         for item in loaded.checklist:
             mark = "x" if item.checked else " "
             typer.echo(f"  - [{mark}] {item.text}")
-    if loaded.verifiers:
+    if loaded.verifier_backend is VerifierBackend.JEV and loaded.jev is not None:
+        typer.echo(f"verifier_backend: jev ({loaded.jev.model})")
+        for question in loaded.jev.questions:
+            typer.echo(f"  - {question.id}: {question.type}")
+    elif loaded.verifiers:
         typer.echo("verifier:")
         for cmd in loaded.verifiers:
             typer.echo(f"  - {cmd}")
@@ -219,7 +227,7 @@ def check(
         ),
     ] = False,
 ) -> None:
-    """Run verifier command(s). Writes evidence. Refuses a self-grade with no verifier."""
+    """Run the verifier. Writes evidence. Refuses a self-grade with no verifier."""
     dest: Path | None = None
     checks: list[dict] = []
     try:
@@ -239,12 +247,22 @@ def check(
         _print_evidence(evidence, err=json_output)
         typer.echo(f"evidence: {dest}", err=json_output)
         if evidence.ok:
+            green_msg = (
+                "GREEN — Jev verifier passed"
+                if evidence.backend == VerifierBackend.JEV.value
+                else "GREEN — verifier exited 0"
+            )
             if json_output:
-                typer.secho("GREEN — verifier exited 0", fg=typer.colors.GREEN, err=True)
+                typer.secho(green_msg, fg=typer.colors.GREEN, err=True)
             else:
-                _ok("GREEN — verifier exited 0")
+                _ok(green_msg)
             return
-        _fail("RED — verifier failed (this is not a self-grade)", process_exit)
+        red_msg = (
+            "RED — Jev verifier failed (this is not a self-grade)"
+            if evidence.backend == VerifierBackend.JEV.value
+            else "RED — verifier failed (this is not a self-grade)"
+        )
+        _fail(red_msg, process_exit)
     except GoalError as exc:
         if json_output:
             _emit_check_json(
@@ -267,7 +285,13 @@ def _require_ready_for_done(loaded: Goal, goal_path: Path) -> None:
         remaining = [item.text for item in loaded.checklist if not item.checked]
         listed = "\n".join(f"  - [ ] {text}" for text in remaining)
         raise DoneRefused(f"checklist incomplete ({len(remaining)} open):\n{listed}")
-    if not loaded.verifiers:
+    if loaded.verifier_backend is VerifierBackend.JEV:
+        if loaded.jev is None:
+            raise DoneRefused(
+                "no Jev verifier — `done` will not accept a self-grade. "
+                "Add a `jev:` block with verifier_backend: jev and run `goal-run check`."
+            )
+    elif not loaded.verifiers:
         raise DoneRefused(
             "no verifier commands — `done` will not accept a self-grade. "
             "Add `verifier:` shell commands and run `goal-run check`."
@@ -289,7 +313,7 @@ def done(
         typer.Option(help="Archive date YYYY-MM-DD (defaults to today)"),
     ] = None,
 ) -> None:
-    """Archive only when every checkbox is ticked AND the last verifier exited 0."""
+    """Archive only when every checkbox is ticked AND the last verifier passed."""
     loaded = _load(goal)
     try:
         _require_ready_for_done(loaded, goal)
@@ -297,7 +321,7 @@ def done(
         save_evidence(evidence_path(goal), evidence)
         _print_evidence(evidence)
         if not evidence.ok:
-            _fail("RED — last verifier did not exit 0; refusing `done`")
+            _fail("RED — last verifier did not pass; refusing `done`")
         dest = archive_goal(loaded, date=date or _today())
     except GoalError as exc:
         _fail(str(exc), exc.exit_code)
@@ -321,7 +345,10 @@ def archive(
     loaded = _load(goal)
     try:
         if loaded.status is not Status.COMPLETED and not force:
-            if loaded.checklist_complete and loaded.verifiers:
+            has_verifier = bool(loaded.verifiers) or (
+                loaded.verifier_backend is VerifierBackend.JEV and loaded.jev is not None
+            )
+            if loaded.checklist_complete and has_verifier:
                 prior = load_evidence(evidence_path(goal))
                 if evidence_is_current(prior, loaded) and prior is not None and prior.ok:
                     dest = archive_goal(loaded, date=date or _today())

@@ -6,7 +6,17 @@ from pathlib import Path
 import yaml
 
 from goal_run.errors import GoalNotFoundError, GoalParseError
-from goal_run.models import ChecklistItem, Goal, ProgressEntry, Status
+from goal_run.models import (
+    DEFAULT_JEV_MODEL,
+    DEFAULT_NOUL_MIN,
+    ChecklistItem,
+    Goal,
+    JevConfig,
+    JevQuestion,
+    ProgressEntry,
+    Status,
+    VerifierBackend,
+)
 
 FRONTMATTER_RE = re.compile(r"\A---[ \t]*\n(.*?)\n---[ \t]*\n?", re.DOTALL)
 HEADING_RE = re.compile(r"^##\s+(.+?)\s*$", re.MULTILINE)
@@ -176,6 +186,143 @@ def _normalize_status(value: object) -> Status:
         raise GoalParseError(f"status must be one of: {allowed}") from exc
 
 
+def _stringify_mapping_keys(value: object) -> dict:
+    if not isinstance(value, dict):
+        raise GoalParseError("expected a mapping")
+    out: dict = {}
+    for key, item in value.items():
+        out[_question_id(key)] = item
+    return out
+
+
+def _question_id(key: object) -> str:
+    if key is True:
+        return "true"
+    if key is False:
+        return "false"
+    return str(key)
+
+
+def _parse_verifier_backend(value: object) -> VerifierBackend | None:
+    if value is None:
+        return None
+    text = str(value).strip().lower()
+    try:
+        return VerifierBackend(text)
+    except ValueError as exc:
+        allowed = ", ".join(item.value for item in VerifierBackend)
+        raise GoalParseError(f"verifier_backend must be one of: {allowed}") from exc
+
+
+def _require_float(value: object, *, field: str) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise GoalParseError(f"{field} must be a number")
+    return float(value)
+
+
+def _parse_jev_question(qid: str, raw: object) -> JevQuestion:
+    if not qid.strip():
+        raise GoalParseError("jev.questions keys must be non-empty names")
+    if not isinstance(raw, dict):
+        raise GoalParseError(f"jev.questions.{qid} must be a mapping")
+    qtype = str(raw.get("type") or "").strip().lower()
+    if qtype in {"boolean", "bool"}:
+        raise GoalParseError(
+            f"jev.questions.{qid}: Jev has no boolean type — use noul (calibrated yes/no)"
+        )
+    if qtype not in {"noul", "choice", "score"}:
+        raise GoalParseError(
+            f"jev.questions.{qid}: type must be noul, choice, or score (not {qtype or 'missing'!r})"
+        )
+    allowed = {"type", "instructions", "criteria"}
+    if qtype == "noul":
+        allowed.add("min")
+    elif qtype == "choice":
+        allowed.add("expected")
+    else:
+        allowed.add("min")
+    extra = set(raw) - allowed
+    if extra:
+        names = ", ".join(sorted(str(key) for key in extra))
+        raise GoalParseError(f"jev.questions.{qid}: unknown field(s): {names}")
+    if "instructions" not in raw:
+        raise GoalParseError(f"jev.questions.{qid}: instructions is required")
+    instructions = raw["instructions"]
+    if instructions is None or (isinstance(instructions, str) and not instructions.strip()):
+        raise GoalParseError(f"jev.questions.{qid}: instructions is required")
+
+    criteria = raw.get("criteria")
+    min_value: float | None = None
+    expected: str | None = None
+
+    if qtype == "noul":
+        if criteria is not None:
+            criteria = _stringify_mapping_keys(criteria)
+        min_value = (
+            _require_float(raw["min"], field=f"jev.questions.{qid}.min")
+            if "min" in raw
+            else DEFAULT_NOUL_MIN
+        )
+    elif qtype == "choice":
+        if not isinstance(criteria, dict) or not criteria:
+            raise GoalParseError(
+                f"jev.questions.{qid}: choice criteria must be a non-empty mapping"
+            )
+        criteria = _stringify_mapping_keys(criteria)
+        if "expected" not in raw or raw["expected"] is None:
+            raise GoalParseError(f"jev.questions.{qid}: choice questions require expected")
+        expected = str(raw["expected"])
+        if expected not in criteria:
+            raise GoalParseError(
+                f"jev.questions.{qid}: expected {expected!r} is not a criteria key"
+            )
+    else:
+        if not isinstance(criteria, list) or not all(isinstance(item, str) for item in criteria):
+            raise GoalParseError(
+                f"jev.questions.{qid}: score criteria must be a list of strings"
+            )
+        if not 2 <= len(criteria) <= 10:
+            raise GoalParseError(
+                f"jev.questions.{qid}: score criteria must have 2–10 levels"
+            )
+        if "min" not in raw:
+            raise GoalParseError(f"jev.questions.{qid}: score questions require min")
+        min_value = _require_float(raw["min"], field=f"jev.questions.{qid}.min")
+
+    return JevQuestion(
+        id=qid,
+        type=qtype,
+        instructions=instructions,
+        criteria=criteria,
+        min_value=min_value,
+        expected=expected,
+    )
+
+
+def _parse_jev_config(raw: object) -> JevConfig:
+    if not isinstance(raw, dict):
+        raise GoalParseError("jev: must be a mapping with state and questions")
+    extra = set(raw) - {"model", "state", "questions"}
+    if extra:
+        names = ", ".join(sorted(str(key) for key in extra))
+        raise GoalParseError(f"jev: unknown field(s): {names}")
+    if "state" not in raw:
+        raise GoalParseError("jev.state is required")
+    state = raw["state"]
+    if not isinstance(state, (str, dict, list)):
+        raise GoalParseError("jev.state must be a string, mapping, or list")
+    if isinstance(state, str) and not state.strip():
+        raise GoalParseError("jev.state is empty")
+    questions_raw = raw.get("questions")
+    if not isinstance(questions_raw, dict) or not questions_raw:
+        raise GoalParseError("jev.questions must be a non-empty mapping of named questions")
+    questions = [
+        _parse_jev_question(_question_id(qid), body) for qid, body in questions_raw.items()
+    ]
+    model = str(raw.get("model") or DEFAULT_JEV_MODEL).strip() or DEFAULT_JEV_MODEL
+    return JevConfig(state=state, questions=questions, model=model)
+
+
 def parse_goal_text(text: str, *, path: Path | None = None) -> Goal:
     if not text.strip():
         raise GoalParseError("GOAL.md is empty")
@@ -231,6 +378,18 @@ def parse_goal_text(text: str, *, path: Path | None = None) -> Goal:
     if not progress and "progress" in sections:
         progress = _parse_progress(sections["progress"])
 
+    jev = _parse_jev_config(fm["jev"]) if "jev" in fm else None
+    backend = _parse_verifier_backend(fm.get("verifier_backend"))
+    if backend is None:
+        if jev is not None and not verifiers:
+            raise GoalParseError(
+                "found jev: config but verifier_backend is not 'jev'; "
+                "set verifier_backend: jev (or add shell verifier commands to keep the default)"
+            )
+        backend = VerifierBackend.SHELL
+    if backend is VerifierBackend.JEV and jev is None:
+        raise GoalParseError("verifier_backend is jev but GOAL.md has no jev: block")
+
     return Goal(
         status=status,
         slug=slug,
@@ -241,6 +400,8 @@ def parse_goal_text(text: str, *, path: Path | None = None) -> Goal:
         progress=progress,
         raw_text=text,
         path=path,
+        verifier_backend=backend,
+        jev=jev,
     )
 
 

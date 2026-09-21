@@ -3,7 +3,7 @@ from __future__ import annotations
 import pytest
 
 from goal_run.errors import GoalParseError
-from goal_run.models import Status
+from goal_run.models import Status, VerifierBackend
 from goal_run.parse import load_goal, parse_goal_text, slugify
 from tests.support import FIXTURES
 
@@ -28,6 +28,8 @@ def test_fixtures_parse(name, slug, status, checked, total, n_verifiers):
     assert goal.checked_count == (checked, total)
     assert len(goal.verifiers) == n_verifiers
     assert goal.objective
+    assert goal.verifier_backend is VerifierBackend.SHELL
+    assert goal.jev is None
 
 
 def test_frontmatter_progress_and_nongoals():

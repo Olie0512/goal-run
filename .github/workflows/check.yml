@@ -1,0 +1,59 @@
+name: goal-run check
+
+"on":
+  workflow_call:
+    inputs:
+      goal:
+        description: Path to GOAL.md
+        required: false
+        type: string
+        default: GOAL.md
+      timeout:
+        description: Seconds per verifier command
+        required: false
+        type: number
+        default: 300
+      python-version:
+        description: Python version for setup-python
+        required: false
+        type: string
+        default: "3.12"
+      json:
+        description: Write a machine-readable report to stdout (goal-run check --json)
+        required: false
+        type: boolean
+        default: true
+
+jobs:
+  check:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ inputs.python-version }}
+      - name: Install goal-run
+        env:
+          JOB_WORKFLOW_REF: ${{ github.job_workflow_ref }}
+          JOB_WORKFLOW_SHA: ${{ github.job_workflow_sha }}
+        run: |
+          set -euo pipefail
+          if [ -z "${JOB_WORKFLOW_REF}" ] || [ -z "${JOB_WORKFLOW_SHA}" ]; then
+            echo "reusable workflow needs github.job_workflow_ref and github.job_workflow_sha" >&2
+            exit 1
+          fi
+          repo="${JOB_WORKFLOW_REF%%/.github/*}"
+          python -m pip install --disable-pip-version-check \
+            "git+https://github.com/${repo}@${JOB_WORKFLOW_SHA}"
+      - name: goal-run check
+        env:
+          GOAL_PATH: ${{ inputs.goal }}
+          GOAL_TIMEOUT: ${{ inputs.timeout }}
+          GOAL_JSON: ${{ inputs.json }}
+        run: |
+          set -euo pipefail
+          extra=()
+          if [ "${GOAL_JSON}" = "true" ]; then
+            extra+=(--json)
+          fi
+          python -m goal_run check --goal "${GOAL_PATH}" --timeout "${GOAL_TIMEOUT}" "${extra[@]}"

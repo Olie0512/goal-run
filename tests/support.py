@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import subprocess
+import sys
 from pathlib import Path
 
 from typer.testing import CliRunner
@@ -17,6 +19,15 @@ def copy_fixture(tmp_path: Path, name: str, dest_name: str = "GOAL.md") -> Path:
 
 def invoke(runner: CliRunner, *args: str):
     return runner.invoke(app, list(args))
+
+
+def run_module(*args: str, cwd: Path | None = None) -> subprocess.CompletedProcess[str]:
+    return subprocess.run(
+        [sys.executable, "-m", "goal_run", *args],
+        capture_output=True,
+        text=True,
+        cwd=cwd,
+    )
 
 
 def output_of(result) -> str:

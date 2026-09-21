@@ -1,5 +1,9 @@
 # goal-run
 
+Markdown checklists do not fail. Agents still tick them and say `done`.
+This CLI runs the verifier you named: RED (exit 1) or GREEN (exit 0), with the evidence on disk.
+`done` refuses a self-grade. That is why you install it instead of another todo list.
+
 **Run until done.** A tiny CLI that turns `GOAL.md` into a state machine with a **separate verifier** — so agents stop declaring victory on vibes.
 
 ```bash
@@ -45,11 +49,27 @@ This repo is not published to PyPI yet. Do not `pip install goal-run` from PyPI 
 | --- | --- |
 | `goal-run init [objective]` | Scaffold `GOAL.md` + `goals/archive/` |
 | `goal-run status` | Parse objective, checklist counts, last evidence |
-| `goal-run check` | Run `verifier` shell commands; write `.goal-run/last-check.json` |
+| `goal-run check [--json]` | Run `verifier` shell commands; write `.goal-run/last-check.json`. `--json` prints `{ok, exit_code, checks, evidence}` on stdout (human text on stderr). RED=1, GREEN=0. |
 | `goal-run done` | Archive **only if** every checkbox is ticked **and** the last verifier exited 0 |
 | `goal-run archive` | Move a completed (or `--force`) GOAL to `goals/archive/YYYY-MM-DD-<slug>.md` |
 
 `done` refuses a self-grade: ticking boxes is not enough, and a missing verifier is not enough. You must have run `goal-run check` and it must have been GREEN. `done` then re-runs the verifier so the last exit code is fresh.
+
+## GitHub Action
+
+Fails the job when `goal-run check` is RED (exit 1). Pin `@v0.1.1` once that tag exists (or a commit SHA until then).
+
+```yaml
+goal:
+  runs-on: ubuntu-latest
+  steps:
+    - uses: actions/checkout@v4
+    - uses: Olie0512/goal-run/.github/actions/check@v0.1.1
+```
+
+Same check as a reusable workflow: `uses: Olie0512/goal-run/.github/workflows/check.yml@v0.1.1`.
+
+Inputs: `goal` (default `GOAL.md`), `timeout`, `python-version`, `json` (default true → `check --json`).
 
 ## GOAL.md schema
 

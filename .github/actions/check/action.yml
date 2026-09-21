@@ -1,0 +1,52 @@
+name: goal-run check
+description: Run goal-run check and fail the job when the verifier is RED (exit 1).
+author: Olie0512
+inputs:
+  goal:
+    description: Path to GOAL.md
+    required: false
+    default: GOAL.md
+  timeout:
+    description: Seconds per verifier command
+    required: false
+    default: "300"
+  python-version:
+    description: Python version for setup-python
+    required: false
+    default: "3.12"
+  json:
+    description: Write a machine-readable report to stdout (goal-run check --json)
+    required: false
+    default: "true"
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-python@v5
+      with:
+        python-version: ${{ inputs.python-version }}
+    - name: Install goal-run
+      shell: bash
+      run: |
+        set -euo pipefail
+        root="${GITHUB_ACTION_PATH}"
+        while [ "${root}" != "/" ] && [ ! -f "${root}/pyproject.toml" ]; do
+          root="$(cd "${root}/.." && pwd)"
+        done
+        if [ ! -f "${root}/pyproject.toml" ]; then
+          echo "goal-run action: pyproject.toml not found above ${GITHUB_ACTION_PATH}" >&2
+          exit 1
+        fi
+        python -m pip install --disable-pip-version-check "${root}"
+    - name: goal-run check
+      shell: bash
+      env:
+        GOAL_PATH: ${{ inputs.goal }}
+        GOAL_TIMEOUT: ${{ inputs.timeout }}
+        GOAL_JSON: ${{ inputs.json }}
+      run: |
+        set -euo pipefail
+        extra=()
+        if [ "${GOAL_JSON}" = "true" ]; then
+          extra+=(--json)
+        fi
+        python -m goal_run check --goal "${GOAL_PATH}" --timeout "${GOAL_TIMEOUT}" "${extra[@]}"

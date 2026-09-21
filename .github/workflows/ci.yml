@@ -34,3 +34,27 @@ jobs:
           fi
           cp tests/fixtures/check_pass.md "$tmp/GOAL.md"
           goal-run check --goal "$tmp/GOAL.md"
+      - name: Fixture check --json is RED then GREEN
+        run: |
+          set -euo pipefail
+          tmp="$(mktemp -d)"
+          cp tests/fixtures/check_fail.md "$tmp/GOAL.md"
+          set +e
+          red_json="$(goal-run check --json --goal "$tmp/GOAL.md")"
+          red_code=$?
+          set -e
+          echo "$red_json"
+          test "$red_code" -eq 1
+          python -c "import json,sys; p=json.loads(sys.argv[1]); assert p['ok'] is False and p['exit_code']==1 and p['checks'][0]['exit_code']==2" "$red_json"
+          cp tests/fixtures/check_pass.md "$tmp/GOAL.md"
+          green_json="$(goal-run check --json --goal "$tmp/GOAL.md")"
+          echo "$green_json"
+          python -c "import json,sys; p=json.loads(sys.argv[1]); assert p['ok'] is True and p['exit_code']==0 and len(p['checks'])==2" "$green_json"
+
+  action-wrapper:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: ./.github/actions/check
+        with:
+          goal: tests/fixtures/check_pass.md

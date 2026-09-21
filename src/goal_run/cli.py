@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import json
 from datetime import date as date_cls
 from pathlib import Path
 from typing import Annotated
@@ -13,8 +14,10 @@ from goal_run.models import ChecklistItem, Goal, ProgressEntry, Status
 from goal_run.parse import load_goal, render_goal, slugify
 from goal_run.verify import (
     DEFAULT_TIMEOUT,
+    command_to_check,
     evidence_is_current,
     evidence_path,
+    json_report,
     load_evidence,
     run_verifiers,
     save_evidence,
@@ -174,39 +177,83 @@ def status(goal: GoalOption = Path("GOAL.md")) -> None:
         typer.echo("last check: stale (GOAL.md verifier changed — run `goal-run check`)")
 
 
-def _print_evidence(evidence) -> None:
+def _print_evidence(evidence, *, err: bool = False) -> None:
     for i, result in enumerate(evidence.commands, start=1):
         label = "GREEN" if result.exit_code == 0 else "RED"
         color = typer.colors.GREEN if result.exit_code == 0 else typer.colors.RED
         typer.secho(
             f"[{label}] {i}/{len(evidence.commands)} exit {result.exit_code}: {result.cmd}",
             fg=color,
+            err=err,
         )
         if result.stdout.strip():
-            typer.echo(result.stdout.rstrip())
+            typer.echo(result.stdout.rstrip(), err=err)
         if result.stderr.strip():
             typer.secho(result.stderr.rstrip(), err=True)
+
+
+def _emit_check_json(
+    *,
+    ok: bool,
+    exit_code: int,
+    checks: list[dict],
+    evidence: Path | str | None,
+) -> None:
+    typer.echo(
+        json.dumps(
+            json_report(ok=ok, exit_code=exit_code, checks=checks, evidence=evidence),
+            ensure_ascii=False,
+        )
+    )
 
 
 @app.command()
 def check(
     goal: GoalOption = Path("GOAL.md"),
     timeout: TimeoutOption = DEFAULT_TIMEOUT,
+    json_output: Annotated[
+        bool,
+        typer.Option(
+            "--json",
+            help="Machine-readable report on stdout (human text on stderr). Exit codes unchanged.",
+        ),
+    ] = False,
 ) -> None:
     """Run verifier command(s). Writes evidence. Refuses a self-grade with no verifier."""
-    loaded = _load(goal)
+    dest: Path | None = None
+    checks: list[dict] = []
     try:
+        loaded = load_goal(goal)
         evidence = run_verifiers(loaded, timeout=timeout)
+        dest = evidence_path(goal)
+        save_evidence(dest, evidence)
+        checks = [command_to_check(row) for row in evidence.commands]
+        process_exit = 0 if evidence.ok else 1
+        if json_output:
+            _emit_check_json(
+                ok=evidence.ok,
+                exit_code=process_exit,
+                checks=checks,
+                evidence=dest,
+            )
+        _print_evidence(evidence, err=json_output)
+        typer.echo(f"evidence: {dest}", err=json_output)
+        if evidence.ok:
+            if json_output:
+                typer.secho("GREEN — verifier exited 0", fg=typer.colors.GREEN, err=True)
+            else:
+                _ok("GREEN — verifier exited 0")
+            return
+        _fail("RED — verifier failed (this is not a self-grade)", process_exit)
     except GoalError as exc:
+        if json_output:
+            _emit_check_json(
+                ok=False,
+                exit_code=exc.exit_code,
+                checks=checks,
+                evidence=dest,
+            )
         _fail(str(exc), exc.exit_code)
-    dest = evidence_path(goal)
-    save_evidence(dest, evidence)
-    _print_evidence(evidence)
-    typer.echo(f"evidence: {dest}")
-    if evidence.ok:
-        _ok("GREEN — verifier exited 0")
-        return
-    _fail("RED — verifier failed (this is not a self-grade)")
 
 
 def _require_ready_for_done(loaded: Goal, goal_path: Path) -> None:

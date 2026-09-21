@@ -19,9 +19,38 @@ EVIDENCE_SCHEMA = 1
 DEFAULT_TIMEOUT = 300
 MAX_CAPTURE = 64_000
 
+# stdout contract for `goal-run check --json` (not the on-disk last-check.json schema)
+JSON_REPORT_KEYS = ("ok", "exit_code", "checks", "evidence")
+JSON_CHECK_KEYS = ("cmd", "exit_code", "ok")
+
 
 def evidence_path(goal_path: Path) -> Path:
     return goal_path.parent / EVIDENCE_DIRNAME / EVIDENCE_FILENAME
+
+
+def command_to_check(result: CommandResult) -> dict:
+    """One `checks[]` row for `goal-run check --json`."""
+    return {
+        "cmd": result.cmd,
+        "exit_code": int(result.exit_code),
+        "ok": result.exit_code == 0,
+    }
+
+
+def json_report(
+    *,
+    ok: bool,
+    exit_code: int,
+    checks: list[dict] | None = None,
+    evidence: str | Path | None = None,
+) -> dict:
+    """Stable stdout payload for `--json`. Keys stay in this order."""
+    return {
+        "ok": bool(ok),
+        "exit_code": int(exit_code),
+        "checks": list(checks or []),
+        "evidence": None if evidence is None else str(evidence),
+    }
 
 
 def verifier_fingerprint(verifiers: list[str]) -> str:

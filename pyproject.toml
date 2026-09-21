@@ -1,6 +1,6 @@
 [project]
 name = "goal-run"
-version = "0.1.0"
+version = "0.1.1"
 description = "CLI that turns GOAL.md into a run-until-done state machine with a separate verifier."
 readme = "README.md"
 license = { file = "LICENSE" }

@@ -11,7 +11,8 @@ from pathlib import Path
 from subprocess import TimeoutExpired, run
 
 from goal_run.errors import CheckFailed
-from goal_run.models import Goal
+from goal_run.jev import SYSTEMONE_URL, run_jev
+from goal_run.models import Goal, VerifierBackend
 
 EVIDENCE_DIRNAME = ".goal-run"
 EVIDENCE_FILENAME = "last-check.json"
@@ -53,8 +54,17 @@ def json_report(
     }
 
 
-def verifier_fingerprint(verifiers: list[str]) -> str:
-    payload = "\n".join(cmd.strip() for cmd in verifiers)
+def verifier_fingerprint(goal: Goal) -> str:
+    """Stable hash of the active verifier. Shell hashing is unchanged from v0.1.1."""
+    if goal.verifier_backend is VerifierBackend.JEV and goal.jev is not None:
+        payload = json.dumps(
+            goal.jev.fingerprint_payload(),
+            sort_keys=True,
+            ensure_ascii=False,
+            default=str,
+        )
+    else:
+        payload = "\n".join(cmd.strip() for cmd in goal.verifiers)
     return hashlib.sha256(payload.encode("utf-8")).hexdigest()
 
 
@@ -103,14 +113,26 @@ class Evidence:
     started_at: str = ""
     finished_at: str = ""
     commands: list[CommandResult] = field(default_factory=list)
+    backend: str = VerifierBackend.SHELL.value
+    model: str | None = None
+    usage: dict | None = None
+    answers: dict | None = None
 
     def to_json(self) -> str:
         payload = asdict(self)
+        # Keep on-disk shell evidence byte-compatible with v0.1.1 (no extra keys).
+        if self.backend == VerifierBackend.SHELL.value:
+            payload.pop("backend", None)
+            payload.pop("model", None)
+            payload.pop("usage", None)
+            payload.pop("answers", None)
         return json.dumps(payload, indent=2, ensure_ascii=False) + "\n"
 
     @classmethod
     def from_dict(cls, data: dict) -> Evidence:
         commands = [CommandResult(**row) for row in data.get("commands", [])]
+        usage = data.get("usage")
+        answers = data.get("answers")
         return cls(
             schema=int(data.get("schema", 0)),
             ok=bool(data.get("ok")),
@@ -119,6 +141,10 @@ class Evidence:
             started_at=str(data.get("started_at", "")),
             finished_at=str(data.get("finished_at", "")),
             commands=commands,
+            backend=str(data.get("backend") or VerifierBackend.SHELL.value),
+            model=None if data.get("model") is None else str(data.get("model")),
+            usage=usage if isinstance(usage, dict) else None,
+            answers=answers if isinstance(answers, dict) else None,
         )
 
 
@@ -154,9 +180,58 @@ def evidence_is_current(evidence: Evidence | None, goal: Goal) -> bool:
         return False
     if evidence.slug != goal.slug:
         return False
-    if evidence.fingerprint != verifier_fingerprint(goal.verifiers):
+    if evidence.fingerprint != verifier_fingerprint(goal):
         return False
     return True
+
+
+def _evidence_from_jev(goal: Goal, *, timeout: int, env: dict[str, str]) -> Evidence:
+    started = _now()
+    evaluation = run_jev(goal, timeout=timeout, env=env)
+    if evaluation.transport_error:
+        results = [
+            CommandResult(
+                cmd=f"jev POST {SYSTEMONE_URL}",
+                exit_code=1,
+                stderr=_clip(evaluation.transport_error),
+            )
+        ]
+        ok = False
+    else:
+        results = []
+        for outcome in evaluation.outcomes:
+            stdout = _clip(json.dumps(outcome.detail, ensure_ascii=False) if outcome.detail else "")
+            results.append(
+                CommandResult(
+                    cmd=outcome.summary,
+                    exit_code=0 if outcome.ok else 1,
+                    stdout=stdout,
+                    stderr=_clip(outcome.error),
+                )
+            )
+        ok = evaluation.ok
+        if not results:
+            results = [
+                CommandResult(
+                    cmd="jev",
+                    exit_code=1,
+                    stderr="Jev returned no question outcomes",
+                )
+            ]
+            ok = False
+    return Evidence(
+        schema=EVIDENCE_SCHEMA,
+        ok=ok,
+        slug=goal.slug,
+        fingerprint=verifier_fingerprint(goal),
+        started_at=started,
+        finished_at=_now(),
+        commands=results,
+        backend=VerifierBackend.JEV.value,
+        model=evaluation.model,
+        usage=evaluation.usage,
+        answers=evaluation.answers,
+    )
 
 
 def run_verifiers(
@@ -165,18 +240,21 @@ def run_verifiers(
     timeout: int = DEFAULT_TIMEOUT,
     env: dict[str, str] | None = None,
 ) -> Evidence:
+    merged_env = os.environ.copy()
+    if env:
+        merged_env.update(env)
+    if goal.verifier_backend is VerifierBackend.JEV:
+        return _evidence_from_jev(goal, timeout=timeout, env=merged_env)
     if not goal.verifiers:
         raise CheckFailed(
             "No verifier commands in GOAL.md. "
-            "goal-run will not accept a self-grade — add a shell command under `verifier:`."
+            "goal-run will not accept a self-grade — add a shell command under `verifier:` "
+            "(or set verifier_backend: jev with a jev: block)."
         )
     cwd = goal.path.parent if goal.path else Path.cwd()
     started = _now()
     results: list[CommandResult] = []
     ok = True
-    merged_env = os.environ.copy()
-    if env:
-        merged_env.update(env)
 
     for cmd in goal.verifiers:
         bound = bind_python_executable(cmd)
@@ -213,7 +291,7 @@ def run_verifiers(
         schema=EVIDENCE_SCHEMA,
         ok=ok,
         slug=goal.slug,
-        fingerprint=verifier_fingerprint(goal.verifiers),
+        fingerprint=verifier_fingerprint(goal),
         started_at=started,
         finished_at=_now(),
         commands=results,

@@ -18,11 +18,12 @@ verifier:
 
 ## Non-goals
 
-- Multi-agent orchestration or an LLM inside this CLI
+- Multi-agent orchestration or a required model inside this CLI
 - Cloud sync, auth, dashboards
-- Star farming or paid APIs
+- Star farming or requiring a paid API for default installs
 - A custom marketing landing page
 
 ## Progress
 
 - 2026-09-19: CloudAgent implemented the public MVP from SPEC
+- 2026-09-21: optional TypeSafe Jev verifier (opt-in, env key only)
